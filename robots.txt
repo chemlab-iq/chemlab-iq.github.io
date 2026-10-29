@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://atheerhamza93-ai.github.io/analytical-chemistry-lab/sitemap.xml
