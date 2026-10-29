@@ -1,0 +1,92 @@
+/* =====================================================================
+   MEASUREMENT UNCERTAINTY (GUM) + REPEATED TRIALS + SOURCES
+   - Every quantitative experiment ends with "result ± U (k = 2)" and an uncertainty budget:
+     which input contributes how much, computed by the GUM law of propagation with numerical
+     sensitivity coefficients. Type B uncertainties come from the instrument specification
+     (tolerance a → u = a/√3, reading resolution d → u = d/(2√3)); Type A from the student's replicates.
+   - The student's own result is compared with the true value by the normalized error En = |Δ| / U.
+   - Repeated trials of the same sample are collected: mean, s, RSD, and concordance.
+   - SOURCES lists the primary source of every constant used in each week.
+   ===================================================================== */
+const SQ3=Math.sqrt(3);
+/* instrument specifications (standard uncertainties) */
+const INSTR={
+ bal:Math.hypot(0.0001/(2*SQ3),0.0001),          /* analytical balance: 0.1 mg readability + 0.1 mg repeatability (g) */
+ burTol:0.05/SQ3,                                 /* Class A 50 mL burette, ISO 385: ±0.05 mL */
+ burRead:0.02,                                    /* reading estimated to 0.01 mL; typical reading/end-point reproducibility */
+ pip25:0.03/SQ3,                                  /* Class A 25 mL pipette, ISO 648: ±0.03 mL */
+ fl100:0.10/SQ3,fl250:0.15/SQ3,                   /* Class A volumetric flasks, ISO 1042: ±0.10 / ±0.15 mL */
+ th1Read:0.5/SQ3,th1Cal:0.5/SQ3,                  /* 1 °C-division thermometer read to half a division; calibration ±0.5 °C */
+ baro:1/(2*SQ3),                                  /* digital barometer, 1 mmHg resolution */
+ ph:0.02,                                         /* calibrated pH meter (buffer ±0.01, meter ±0.01) */
+ hydRead:0.0005/SQ3,hydCal:0.0005/SQ3             /* hydrometer: half-division reading, scale calibration */
+};
+const UN=(ar,en)=>L(ar,en);
+/* GUM propagation with numerical sensitivity coefficients */
+function gumBudget(f,inputs){const x0=inputs.map(i=>i.x);const y=f(...x0);
+ const terms=inputs.map((inp,j)=>{const h=Math.max(Math.abs(inp.x)*1e-6,1e-9);const xp=x0.slice(),xm=x0.slice();xp[j]+=h;xm[j]-=h;const c=(f(...xp)-f(...xm))/(2*h);return{n:inp.n,u:inp.u,unit:inp.unit||"",c,ui:Math.abs(c*inp.u)}});
+ const uc=Math.sqrt(terms.reduce((a,t)=>a+t.ui*t.ui,0));terms.forEach(t=>t.share=uc>0?t.ui*t.ui/(uc*uc):0);return{y,uc,U:2*uc,terms}}
+/* per-week measurement models */
+const UNCDEF={
+ 1:P=>{const r=P.rec;if(r.w1==null)return null;return{f:(a,b,c)=>(a+b+c)/3,unit:"g",dp:4,lbl:UN("متوسط الوزنات","Mean of the weighings"),
+   in:[{n:UN("الوزنة 1 (الميزان)","Weighing 1 (balance)"),x:r.w1,u:INSTR.bal,unit:"g"},{n:UN("الوزنة 2 (الميزان)","Weighing 2 (balance)"),x:r.w2,u:INSTR.bal,unit:"g"},{n:UN("الوزنة 3 (الميزان)","Weighing 3 (balance)"),x:r.w3,u:INSTR.bal,unit:"g"}]}},
+ 2:P=>{const r=P.rec;return{f:(m0,m1,m2,T)=>(m2-m0)/(m1-m0)*rhoWater(T),unit:"g/mL",dp:5,lbl:UN("كثافة العينة","Sample density"),
+   in:[{n:"m₀",x:r.m0,u:INSTR.bal,unit:"g"},{n:"m₁",x:r.m1,u:INSTR.bal,unit:"g"},{n:"m₂",x:r.m2,u:INSTR.bal,unit:"g"},{n:UN("حرارة الماء T (تدريجة 0.2 °C)","Water temperature T (0.2 °C division)"),x:r.T,u:Math.hypot(0.1/SQ3,0.2/SQ3),unit:"°C"}]}},
+ 3:P=>{const r=P.rec,c=P.ctx;if(typeof vcf!=="function")return null;const corr=(r.rT??r.hr)-r.hr;return{f:(hr,T)=>{const rT=hr+corr;let x=rT;for(let i=0;i<8;i++)x=rT/vcf(c.cls,x,T);return 141.5/(x/0.99904)-131.5},unit:"°API",dp:1,lbl:UN("درجة API","API gravity"),
+   in:[{n:UN("قراءة الهيدروميتر","Hydrometer reading"),x:r.hr,u:Math.hypot(INSTR.hydRead,INSTR.hydCal),unit:"g/mL"},{n:UN("حرارة العينة (تدريجة 0.5 °C)","Sample temperature (0.5 °C division)"),x:r.T,u:Math.hypot(0.25/SQ3,0.5/SQ3),unit:"°C"}]}},
+ 4:P=>{const r=P.rec;return{f:(t,cal,lag)=>t+cal+lag,unit:"°C",dp:1,lbl:UN("نهاية الانصهار","End of melting"),
+   in:[{n:UN("قراءة المحرار (نصف تدريجة)","Thermometer reading (half division)"),x:r.t2,u:INSTR.th1Read,unit:"°C"},{n:UN("معايرة المحرار ±0.5 °C","Thermometer calibration ±0.5 °C"),x:0,u:INSTR.th1Cal,unit:"°C"},{n:UN("تأخر حراري عند 1 °C/دقيقة","Thermal lag at 1 °C/min"),x:0,u:0.5/SQ3,unit:"°C"}]}},
+ 5:P=>{const r=P.rec,c=P.ctx;return{f:(T,p,k,cal)=>T+cal+k*(760-p)*(T+cal+273.15),unit:"°C",dp:1,lbl:UN("درجة الغليان عند 760 mmHg","Boiling point at 760 mmHg"),
+   in:[{n:UN("قراءة المحرار","Thermometer reading"),x:r.Tobs,u:INSTR.th1Read,unit:"°C"},{n:UN("الضغط الجوي","Atmospheric pressure"),x:r.P,u:INSTR.baro,unit:"mmHg"},{n:UN("ثابت سيدني يونغ k","Sidney Young constant k"),x:c.k,u:0.00002/SQ3,unit:""},{n:UN("معايرة المحرار","Thermometer calibration"),x:0,u:INSTR.th1Cal,unit:"°C"}]}},
+ 7:P=>{const r=P.rec,c=P.ctx;return{f:(p,pc,m)=>(pc-p)/m*100,unit:"%",dp:2,lbl:UN("نسبة الاسترجاع","Percent recovery"),
+   in:[{n:UN("ورقة الترشيح","Filter paper"),x:r.p,u:INSTR.bal,unit:"g"},{n:UN("الورقة + البلورات","Paper + crystals"),x:r.pc,u:INSTR.bal,unit:"g"},{n:UN("كتلة العينة الأصلية","Original sample mass"),x:c.m,u:INSTR.bal,unit:"g"}],
+   note:UN("هذه الميزانية تشمل أخطاء القياس فقط؛ الفقد الإجرائي (الغسل، النقل، البلورات الرطبة) أكبر منها عادة ولا يُعالَج إحصائياً.","This budget covers measurement only; procedural losses (washing, transfer, wet crystals) are usually larger and are not treated statistically.")}},
+ 8:P=>{const r=P.rec;const K=r.n/r.m;return{f:(m,vi,vf,tol,pur)=>m*pur*K/((vf-vi+tol)/1000),unit:"M",dp:4,lbl:UN("مولارية NaOH","NaOH molarity"),
+   in:[{n:UN("كتلة المادة القياسية (وزنتان بالفرق)","Standard mass (two weighings by difference)"),x:r.m,u:INSTR.bal*Math.SQRT2,unit:"g"},{n:UN("القراءة الابتدائية","Initial reading"),x:r.vi,u:INSTR.burRead,unit:"mL"},{n:UN("القراءة النهائية (مع نقطة النهاية)","Final reading (incl. end point)"),x:r.vf,u:Math.hypot(INSTR.burRead,0.02),unit:"mL"},{n:UN("سماحية السحاحة (فئة A)","Burette tolerance (Class A)"),x:0,u:INSTR.burTol,unit:"mL"},{n:UN("نقاوة المادة القياسية","Purity of the primary standard"),x:1,u:0.0005/SQ3,unit:""}]}},
+ 9:P=>{const r=P.rec,c=P.ctx;let dI=0;try{dI=Math.abs(endV(c.Ca,25,c.Cb,c.pKa,c.strong,c.pe||8.7)-c.Ca*25/c.Cb)}catch(e){}return{f:(Cb,vi,vf,tol,Va,ind)=>Cb*(vf-vi+tol+ind)/Va,unit:"M",dp:4,lbl:UN("تركيز الحامض","Acid concentration"),
+   in:[{n:UN("تركيز NaOH المعاير","Standardized NaOH concentration"),x:c.Cb,u:c.Cb*0.002,unit:"M"},{n:UN("القراءة الابتدائية","Initial reading"),x:r.vi,u:INSTR.burRead,unit:"mL"},{n:UN("القراءة النهائية (مع نقطة النهاية)","Final reading (incl. end point)"),x:r.vf,u:Math.hypot(INSTR.burRead,0.02),unit:"mL"},{n:UN("سماحية السحاحة (فئة A)","Burette tolerance (Class A)"),x:0,u:INSTR.burTol,unit:"mL"},{n:UN("حجم الماصة 25 mL (فئة A)","Pipette volume 25 mL (Class A)"),x:25,u:INSTR.pip25,unit:"mL"},{n:UN("خطأ الدليل (نقطة النهاية ≠ نقطة التكافؤ)","Indicator error (end point ≠ equivalence point)"),x:0,u:Math.max(dI,0.005)/SQ3,unit:"mL"}]}},
+ 10:P=>{const r=P.rec,c=P.ctx;return{f:(m,pur,V,M)=>m*pur/(M*V/1000),unit:"M",dp:5,lbl:UN("المولارية","Molarity"),
+   in:[{n:UN("الكتلة الموزونة","Mass weighed"),x:r.m,u:INSTR.bal,unit:"g"},{n:UN("نقاوة الكاشف (AR ≥ 99.5%)","Reagent purity (AR ≥ 99.5%)"),x:1,u:0.005/SQ3,unit:""},{n:UN(`حجم الدورق ${c.V} mL (فئة A)`,`Flask volume ${c.V} mL (Class A)`),x:c.V,u:c.V===250?INSTR.fl250:INSTR.fl100,unit:"mL"},{n:UN("الكتلة المولية","Molar mass"),x:r.M,u:r.M*2e-5,unit:"g/mol"}]}},
+ 11:P=>{const r=P.rec;return{f:(m,pur,V,E)=>m*pur/(E*V/1000),unit:"N",dp:5,lbl:UN("العيارية","Normality"),
+   in:[{n:UN("الكتلة الموزونة","Mass weighed"),x:r.m,u:INSTR.bal,unit:"g"},{n:UN("نقاوة الكاشف (AR ≥ 99.5%)","Reagent purity (AR ≥ 99.5%)"),x:1,u:0.005/SQ3,unit:""},{n:UN("حجم الدورق 250 mL (فئة A)","Flask volume 250 mL (Class A)"),x:250,u:INSTR.fl250,unit:"mL"},{n:UN("الوزن المكافئ","Equivalent weight"),x:r.Eq,u:r.Eq*2e-5,unit:"g/eq"}]}},
+ 12:P=>{const r=P.rec;return{f:pH=>pH,unit:"",dp:2,lbl:"pH",in:[{n:UN("جهاز pH معاير (محاليل منظمة ±0.01)","Calibrated pH meter (buffers ±0.01)"),x:r.pH,u:INSTR.ph,unit:""}],
+   note:UN(`لاحظ أن ±0.02 في pH تعني ±${pF(Math.LN10*0.04*100,0)}% تقريباً في [H⁺] (k = 2): pH لوغاريتمي.`,`Note that ±0.02 in pH means about ±${pF(Math.LN10*0.04*100,0)}% in [H⁺] (k = 2): pH is logarithmic.`)}}};
+function uncHTML(P,R){const d=UNCDEF[P.w];if(!d)return"";let D;try{D=d(P)}catch(e){return""}if(!D||D.in.some(i=>!isFinite(i.x)))return"";const B=gumBudget(D.f,D.in);if(!isFinite(B.uc)||B.uc<=0)return"";
+ const fmt=v=>pF(v,D.dp);const Ud=+(B.U).toPrecision(2);
+ let en="";if(R&&R.true!=null&&R.student!=null){const dlt=R.student-R.true;const E=Math.abs(dlt)/B.U;en=`<div class="${E<=1?"tip":"warnbox part"}" style="margin-top:6px">${L("الفرق عن القيمة الحقيقية","Difference from the true value")} Δ = <bdi class="ltr">${pF(dlt,D.dp)} ${D.unit}</bdi> · ${L("الخطأ المعياري","normalized error")} E<sub>n</sub> = |Δ| / U = <bdi class="ltr"><b>${pF(E,2)}</b></bdi> — ${E<=1?L("ضمن الشك بالقياس: نتيجتك متوافقة مع القيمة الحقيقية.","within the uncertainty: your result agrees with the true value."):L("أكبر من الشك بالقياس: يوجد خطأ إجرائي أو منتظم يجب تفسيره (راجع الأخطاء أدناه).","larger than the uncertainty: there is a procedural or systematic error to explain (see the errors below).")}</div>`}
+ const rows=B.terms.slice().sort((a,b)=>b.share-a.share).map(t=>`<tr><td>${t.n}</td><td class="ltr mono">${+t.u.toPrecision(2)} ${t.unit}</td><td><div class="ubar"><i style="width:${(t.share*100).toFixed(1)}%"></i></div></td><td class="ltr mono">${(t.share*100).toFixed(0)}%</td></tr>`).join("");
+ const top=B.terms.slice().sort((a,b)=>b.share-a.share)[0];
+ return`<div class="unc"><b>📏 ${L("الشك بالقياس (طريقة GUM)","Measurement uncertainty (GUM)")}</b>
+ <div class="uncres">${D.lbl} = <bdi class="ltr"><b>${fmt(B.y)} ± ${pF(Ud,Math.max(D.dp,0))} ${D.unit}</b></bdi> <span class="muted">(${L("k = 2، مستوى ثقة نحو 95%","k = 2, about 95% confidence")})</span></div>
+ <div class="tbl"><table class="gtable"><thead><tr><th>${L("مصدر الشك","Source")}</th><th>u(xᵢ)</th><th>${L("المساهمة","Contribution")}</th><th>%</th></tr></thead><tbody>${rows}</tbody></table></div>
+ <p class="muted" style="margin:4px 0 0;font-size:12.5px">${L("أكبر مصدر للشك","Largest source")}: <b>${top.n}</b>. ${L("u من مواصفة الجهاز: السماحية a ← a/√3، ودقة القراءة d ← d/(2√3)؛ ثم U = 2 × √Σ(cᵢ·uᵢ)².","u from the instrument specification: tolerance a → a/√3, reading resolution d → d/(2√3); then U = 2 × √Σ(cᵢ·uᵢ)².")}${D.note?" "+D.note:""}</p>${en}</div>`}
+/* ---------- repeated trials of the same sample ---------- */
+const TRIALS={};
+function trialsHTML(P,R){if(!R||R.student==null||!isFinite(R.student))return"";const key=P.w+"|"+P.samp.label;const T=TRIALS[key]||(TRIALS[key]=[]);
+ const tag=P.rec.vf!=null&&P.rec.vi!=null?+(P.rec.vf-P.rec.vi).toFixed(2):null;if(!P._trialSaved){T.push({v:R.student,V:tag,ok:!P.flags.length});P._trialSaved=1}
+ const dp=R.dp??4;const n=T.length;const mean=T.reduce((a,t)=>a+t.v,0)/n;const s=n>1?Math.sqrt(T.reduce((a,t)=>a+(t.v-mean)**2,0)/(n-1)):0;
+ let conc="";if(P.w===8&&n>1){const vs=T.slice(-3).map(t=>t.v);const rr=(Math.max(...vs)-Math.min(...vs))/mean*100;conc=`<div class="${rr<=0.2?"tip":"warnbox part"}" style="margin-top:4px">${L("المدى النسبي لنتائج المعايرة","Relative range of the standardization results")}: <bdi class="ltr">${pF(rr,2)}%</bdi> — ${rr<=0.2?L("متوافقة (ضمن 0.2%).","concordant (within 0.2%)."):L("غير متوافقة: أعد المعايرة حتى تتفق نتيجتان ضمن 0.2%.","not concordant: repeat until two results agree within 0.2%.")}</div>`}else if(tag!=null&&n>1){const Vs=T.map(t=>t.V).filter(v=>v!=null).slice(-3);const sp=Math.max(...Vs)-Math.min(...Vs);conc=`<div class="${sp<=0.10?"tip":"warnbox part"}" style="margin-top:4px">${L("مدى أحجام التسحيح","Titre range")}: <bdi class="ltr">${pF(sp,2)} mL</bdi> — ${sp<=0.10?L("متوافقة (ضمن 0.10 mL).","concordant (within 0.10 mL)."):L("غير متوافقة: أعد التسحيح حتى تتفق قراءتان ضمن 0.10 mL.","not concordant: repeat until two titres agree within 0.10 mL.")}</div>`}
+ return`<div class="unc"><b>🔁 ${L("المحاولات المتكررة لهذه العينة","Repeated trials of this sample")} (${n})</b>
+ <div class="tbl"><table class="gtable"><thead><tr><th>#</th><th>${L("النتيجة","Result")}</th>${tag!=null?`<th>V (mL)</th>`:""}<th>${L("إجراء سليم؟","Clean procedure?")}</th></tr></thead><tbody>${T.map((t,i)=>`<tr><td>${i+1}</td><td class="ltr mono">${pF(t.v,dp)} ${R.unit||""}</td>${tag!=null?`<td class="ltr mono">${t.V!=null?pF(t.V,2):"—"}</td>`:""}<td>${t.ok?"✓":"✗"}</td></tr>`).join("")}</tbody></table></div>
+ ${n>1?`<div class="uncres">${L("المتوسط","Mean")} = <bdi class="ltr"><b>${pF(mean,dp)}</b></bdi> · <bdi class="ltr">s = ${+s.toPrecision(2)}</bdi> · <bdi class="ltr">RSD = ${pF(s/Math.abs(mean)*100,2)}%</bdi> · ${L("الشك من التكرار (النوع A)","Type A uncertainty")} <bdi class="ltr">s/√n = ${+(s/Math.sqrt(n)).toPrecision(2)}</bdi></div>`:`<p class="muted" style="margin:4px 0 0;font-size:12.5px">${L("أعد التجربة بنفس العينة (الزر أدناه) لتحصل على محاولات متكررة: المتوسط والانحراف المعياري وRSD.","Repeat with the same sample (button below) to get replicates: mean, standard deviation and RSD.")}</p>`}${conc}</div>`}
+/* ---------- primary sources of the constants used each week ---------- */
+const SRC_ISO=["الزجاجيات الحجمية من الفئة A: ISO 385 (السحاحات)، ISO 648 (الماصات)، ISO 1042 (الدوارق الحجمية).","Class A volumetric glassware: ISO 385 (burettes), ISO 648 (pipettes), ISO 1042 (volumetric flasks)."];
+const SRC_GUM=["تقدير الشك بالقياس: JCGM 100:2008 (GUM)، الدليل الدولي للتعبير عن الشك في القياس.","Uncertainty evaluation: JCGM 100:2008 (GUM), Guide to the expression of uncertainty in measurement."];
+const SRC_AW=["الكتل الذرية القياسية: IUPAC (الأوزان الذرية القياسية).","Standard atomic weights: IUPAC (Commission on Isotopic Abundances and Atomic Weights)."];
+const SOURCES={
+1:[["نظام GHS لتصنيف المواد الكيميائية ووسمها (الأمم المتحدة، الكتاب البنفسجي).","GHS — Globally Harmonized System of Classification and Labelling of Chemicals (UN Purple Book)."],SRC_ISO,SRC_GUM],
+2:[["كثافة الماء مع الحرارة: معادلة Tanaka وآخرين، Metrologia 38 (2001) 301.","Water density vs temperature: Tanaka et al., Metrologia 38 (2001) 301."],["كثافات السوائل المرجعية: CRC Handbook of Chemistry and Physics.","Reference liquid densities: CRC Handbook of Chemistry and Physics."],["طريقة البكنوميتر: ASTM D1217 / ASTM D1480.","Pycnometer method: ASTM D1217 / ASTM D1480."],SRC_GUM],
+3:[["قياس الكثافة بالهيدروميتر: ASTM D1298 (ISO 3675).","Hydrometer density: ASTM D1298 (ISO 3675)."],["تصحيح الحرارة إلى 60 °F: ASTM D1250 / API MPMS 11.1.","Temperature correction to 60 °F: ASTM D1250 / API MPMS 11.1."],["درجة API = 141.5/SG − 131.5 (American Petroleum Institute).","API gravity = 141.5/SG − 131.5 (American Petroleum Institute)."],SRC_GUM],
+4:[["درجات الانصهار المرجعية: CRC Handbook of Chemistry and Physics.","Reference melting points: CRC Handbook of Chemistry and Physics."],["طريقة الشعرية: USP ‹741› Melting Range or Temperature.","Capillary method: USP ‹741› Melting Range or Temperature."],["انخفاض درجة الانصهار بالشوائب: معادلة شرودر–فان لار، وقاعدة والدن للحرارة الكامنة.","Melting-point depression by impurity: Schröder–van Laar equation, with Walden’s rule for the enthalpy of fusion."],SRC_GUM],
+5:[["درجات الغليان المرجعية عند 760 mmHg: CRC Handbook / NIST Chemistry WebBook.","Reference boiling points at 760 mmHg: CRC Handbook / NIST Chemistry WebBook."],["طريقة سيولوبوف: OECD Test Guideline 103 (Boiling Point).","Siwoloboff method: OECD Test Guideline 103 (Boiling Point)."],["تصحيح الضغط: معادلة سيدني يونغ.","Pressure correction: Sidney Young equation."],SRC_GUM],
+6:[["بيانات الذوبانية مع الحرارة: CRC Handbook of Chemistry and Physics.","Solubility vs temperature data: CRC Handbook of Chemistry and Physics."]],
+7:[["بيانات الذوبانية مع الحرارة: CRC Handbook of Chemistry and Physics.","Solubility vs temperature data: CRC Handbook of Chemistry and Physics."],SRC_GUM],
+8:[["KHP مادة قياسية أولية (NIST SRM 84)، M = 204.22 g/mol.","KHP primary standard (NIST SRM 84), M = 204.22 g/mol."],SRC_AW,SRC_ISO,SRC_GUM],
+9:[["قيم pKa: CRC Handbook of Chemistry and Physics (25 °C).","pKa values: CRC Handbook of Chemistry and Physics (25 °C)."],["مديات تغير ألوان الأدلة: Harris, Quantitative Chemical Analysis.","Indicator transition ranges: Harris, Quantitative Chemical Analysis."],SRC_ISO,SRC_GUM],
+10:[SRC_AW,SRC_ISO,SRC_GUM],
+11:[SRC_AW,["كثافات وتراكيز الأحماض التجارية: CRC Handbook of Chemistry and Physics.","Densities and concentrations of commercial acids: CRC Handbook of Chemistry and Physics."],SRC_ISO,SRC_GUM],
+12:[["محاليل pH المنظمة المرجعية: NIST SRM 185/186، و IUPAC (Buck وآخرون 2002).","Reference pH buffers: NIST SRM 185/186 and IUPAC (Buck et al., 2002)."],["Kw = 1.0×10⁻¹⁴ عند 25 °C، وقيم Ka/Kb من CRC Handbook.","Kw = 1.0×10⁻¹⁴ at 25 °C; Ka/Kb from the CRC Handbook."],SRC_GUM],
+13:[["ثوابت حاصل الإذابة Ksp عند 25 °C: CRC Handbook of Chemistry and Physics.","Solubility products Ksp at 25 °C: CRC Handbook of Chemistry and Physics."],["منحنيات الذوبانية: CRC Handbook of Chemistry and Physics.","Solubility curves: CRC Handbook of Chemistry and Physics."]]};
+function sourcesHTML(w){const S=SOURCES[w];if(!S)return"";const ISOT=["CRC Handbook of Chemistry and Physics", "CRC Handbook / NIST Chemistry WebBook", "USP ‹741› Melting Range or Temperature", "OECD Test Guideline 103 (Boiling Point)", "ASTM D1250 / API MPMS 11.1", "ASTM D1217 / ASTM D1480", "ASTM D1298 (ISO 3675)", "Metrologia 38 (2001) 301", "Harris, Quantitative Chemical Analysis", "JCGM 100:2008 (GUM)", "NIST SRM 185/186", "Buck", "American Petroleum Institute", "M = 204.22 g/mol", "NIST SRM 84", "Kw = 1.0×10⁻¹⁴", "API = 141.5/SG − 131.5", "ISO 1042", "ISO 385", "ISO 648", "IUPAC", "Tanaka", "GHS", "Ksp", "pKa", "Ka/Kb", "KHP", "CRC Handbook", "الفئة A", "API"];const iso=t=>{if(isEN())return t;let o=t;const ph=[];ISOT.forEach((k,n)=>{if(o.includes(k)){o=o.split(k).join("\u0001"+n+"\u0002")}});return o.replace(/\u0001(\d+)\u0002/g,(m,n)=>{const k=ISOT[+n];return k==="الفئة A"?'الفئة <bdi dir="ltr">A</bdi>':`<bdi dir="ltr">${k}</bdi>`})};return`<ol style="margin:0;padding-inline-start:22px;display:flex;flex-direction:column;gap:3px">${S.map(s=>`<li>${iso(L(s[0],s[1]))}</li>`).join("")}</ol>`}
+
+function uncU(P){const d=UNCDEF[P.w];if(!d)return null;try{const D=d(P);if(!D||D.in.some(i=>!isFinite(i.x)))return null;const B=gumBudget(D.f,D.in);return isFinite(B.U)&&B.U>0?B.U:null}catch(e){return null}}
